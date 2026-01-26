@@ -11,6 +11,9 @@ from pathlib import Path
 import pyautogui
 import win32gui
 
+from src.citra.citra_environment import CitraAgent
+
+
 class SaveStateManager:
     """
     Manages Citra save states for Pokemon training.
@@ -220,10 +223,8 @@ class CitraPokemonEnvWithSaveStates:
             window_name: Citra window title
             save_dir: Directory for save state metadata
         """
-        # Import the base environment
-        from citra_environment import CitraPokemonEnv
         
-        self.base_env = CitraPokemonEnv(window_name)
+        self.base_env = CitraAgent(window_name)
         self.save_manager = SaveStateManager(save_dir, window_name)
         self.current_checkpoint = None
         
