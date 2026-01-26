@@ -3,7 +3,8 @@ import time
 import cv2
 import numpy as np
 
-from src.citra_environment import CitraAgent
+from src.citra.citra_environment import CitraAgent
+from src.citra.citra_save_state import interactive_save_creator
 
 
 if __name__ == "__main__":
@@ -78,3 +79,6 @@ if __name__ == "__main__":
     print("Actions:", env.action_space)
     
     env.close()
+
+    # Run save state creator
+    interactive_save_creator()
