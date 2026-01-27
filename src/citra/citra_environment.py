@@ -11,9 +11,10 @@ import win32ui
 import win32con
 from PIL import Image
 from pynput.keyboard import Key, Controller
+import ctypes
 
 
-class CitraAgent:
+class CitraPokemonEnv:
     """
     Environment wrapper for Pokemon Sun/Moon running in Citra emulator.
     Handles screen capture and button inputs.
@@ -74,52 +75,43 @@ class CitraAgent:
         
     def capture_screen(self, resize=None):
         """
-        Capture the Citra window screen.
-        
-        Args:
-            resize: Tuple (width, height) to resize the captured image. 
-                   None keeps original size.
-        
-        Returns:
-            numpy array: RGB image of the screen
+        Improved capture using PrintWindow to handle hardware-accelerated content.
         """
-        # Get window dimensions
+        # Get the actual window size
         left, top, right, bottom = win32gui.GetWindowRect(self.hwnd)
         width = right - left
         height = bottom - top
-        
-        # Create device context
+
+        # Create DCs
         hwnd_dc = win32gui.GetWindowDC(self.hwnd)
         mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
         save_dc = mfc_dc.CreateCompatibleDC()
-        
-        # Create bitmap
+
+        # Create Bitmap
         bitmap = win32ui.CreateBitmap()
         bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
         save_dc.SelectObject(bitmap)
-        
-        # Copy screen to bitmap
-        save_dc.BitBlt((0, 0), (width, height), mfc_dc, (0, 0), win32con.SRCCOPY)
-        
-        # Convert to numpy array
+
+        # Use PrintWindow instead of BitBlt
+        # The '2' flag is PW_RENDERFULLCONTENT (handles hardware acceleration better)
+        result = ctypes.windll.user32.PrintWindow(self.hwnd, save_dc.GetSafeHdc(), 2)
+
+        # Convert to numpy
         bmpinfo = bitmap.GetInfo()
         bmpstr = bitmap.GetBitmapBits(True)
         img = np.frombuffer(bmpstr, dtype=np.uint8)
         img = img.reshape((bmpinfo['bmHeight'], bmpinfo['bmWidth'], 4))
-        
+
         # Cleanup
         win32gui.DeleteObject(bitmap.GetHandle())
         save_dc.DeleteDC()
         mfc_dc.DeleteDC()
         win32gui.ReleaseDC(self.hwnd, hwnd_dc)
-        
-        # Convert BGRA to RGB
-        img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
-        
+
         # Resize if requested
         if resize:
             img = cv2.resize(img, resize, interpolation=cv2.INTER_AREA)
-        
+
         return img
     
     def press_button(self, button, duration=0.1):

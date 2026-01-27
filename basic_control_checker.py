@@ -3,8 +3,7 @@ import time
 import cv2
 import numpy as np
 
-from src.citra.citra_environment import CitraAgent
-from src.citra.citra_save_state import interactive_save_creator
+from src.citra.citra_environment import CitraPokemonEnv
 
 
 if __name__ == "__main__":
@@ -12,7 +11,7 @@ if __name__ == "__main__":
     
     # Initialize environment
     try:
-        env = CitraAgent(window_name="Citra")
+        env = CitraPokemonEnv(window_name="Citra")
     except Exception as e:
         print(f"Error: {e}")
         print("\nMake sure:")
@@ -79,6 +78,3 @@ if __name__ == "__main__":
     print("Actions:", env.action_space)
     
     env.close()
-
-    # Run save state creator
-    interactive_save_creator()
