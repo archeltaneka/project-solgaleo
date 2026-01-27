@@ -9,9 +9,9 @@ import time
 import win32gui
 import win32ui
 import win32con
+import ctypes
 from PIL import Image
 from pynput.keyboard import Key, Controller
-import ctypes
 
 
 class CitraPokemonEnv:
@@ -75,7 +75,15 @@ class CitraPokemonEnv:
         
     def capture_screen(self, resize=None):
         """
-        Improved capture using PrintWindow to handle hardware-accelerated content.
+        Capture the Citra window screen using PrintWindow.
+        This method works with hardware-accelerated content (OpenGL/Vulkan).
+        
+        Args:
+            resize: Tuple (width, height) to resize the captured image. 
+                   None keeps original size.
+        
+        Returns:
+            numpy array: RGB image of the screen
         """
         # Get the actual window size
         left, top, right, bottom = win32gui.GetWindowRect(self.hwnd)
@@ -160,8 +168,10 @@ class CitraPokemonEnv:
         # Small delay for game to respond
         time.sleep(0.05)
         
-        # Capture new state
-        observation = self.capture_screen(resize=(240, 160))  # Resize for faster processing
+        # Capture new state - using reasonable resolution
+        # 3DS native: Top=400x240, Bottom=320x240
+        # We'll capture at half resolution for balance
+        observation = self.capture_screen(resize=(400, 240))
         
         return observation
     
@@ -170,7 +180,7 @@ class CitraPokemonEnv:
         Reset the environment (you'll need to implement save state loading).
         For now, just captures the current screen.
         """
-        return self.capture_screen(resize=(240, 160))
+        return self.capture_screen(resize=(400, 240))
     
     def render(self, observation):
         """Display the current observation."""

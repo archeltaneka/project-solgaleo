@@ -11,7 +11,7 @@ from pathlib import Path
 import pyautogui
 import win32gui
 
-from src.citra.citra_environment import CitraAgent
+from src.citra.citra_environment import CitraPokemonEnv
 
 
 class SaveStateManager:
@@ -224,7 +224,7 @@ class CitraPokemonEnvWithSaveStates:
             save_dir: Directory for save state metadata
         """
         
-        self.base_env = CitraAgent(window_name)
+        self.base_env = CitraPokemonEnv(window_name)
         self.save_manager = SaveStateManager(save_dir, window_name)
         self.current_checkpoint = None
         
@@ -262,7 +262,7 @@ class CitraPokemonEnvWithSaveStates:
         time.sleep(1.2)
         
         # Return initial observation
-        return self.base_env.capture_screen(resize=(240, 160))
+        return self.base_env.capture_screen(resize=(400, 240))
     
     def step(self, action_idx, hold_duration=0.1):
         """Perform one step."""
