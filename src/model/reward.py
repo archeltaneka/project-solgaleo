@@ -6,8 +6,6 @@ Provides reward signals based on visual observation and game progress.
 import numpy as np
 import cv2
 from collections import deque
-import imagehash
-from PIL import Image
 
 
 class PokemonRewardCalculator:
@@ -83,11 +81,26 @@ class PokemonRewardCalculator:
             self.steps_without_progress += 1
         
         # 2. Reward for visiting new screen areas
-        area_hash = self._hash_screen_area(curr_obs)
-        if area_hash not in self.visited_areas:
-            self.visited_areas.add(area_hash)
-            reward += 1.0  # Big reward for new areas
-            print(f"  [Reward] New area discovered! +1.0")
+        # Only count as new area if NOT in a menu
+        if not self._is_menu_screen(curr_obs):
+            area_hash = self._hash_screen_area(curr_obs)
+            is_new_area = True
+            
+            # Check if this area is similar to any previously visited area
+            for visited_hash in self.visited_areas:
+                # Calculate Hamming distance (how many bits differ)
+                hamming_dist = bin(area_hash ^ visited_hash).count('1')
+                similarity = 1.0 - (hamming_dist / 256.0)  # 16x16 = 256 bits
+                
+                # If similarity > 85%, consider it the same area
+                if similarity > 0.85:
+                    is_new_area = False
+                    break
+            
+            if is_new_area:
+                self.visited_areas.add(area_hash)
+                reward += 1.0  # Big reward for new areas
+                print(f"  [Reward] New area/cutscene discovered! +1.0 (Total areas: {len(self.visited_areas)})")
         
         # 3. Penalty for getting stuck
         if self.steps_without_progress > 50:
@@ -96,6 +109,11 @@ class PokemonRewardCalculator:
         # 4. Small reward for forward movement (directional bias)
         if action in ['UP', 'DOWN', 'LEFT', 'RIGHT']:
             reward += 0.01
+        
+        # 5. Penalty for opening menus during exploration (we want movement, not menu browsing)
+        if self._is_menu_screen(curr_obs):
+            print(f"  [Penalty] Menu opened! -0.2")
+            reward -= 0.2  # Small penalty for opening menu
         
         return reward
     
@@ -203,19 +221,34 @@ class PokemonRewardCalculator:
         return diff_score > 5.0
     
     def _hash_screen_area(self, obs):
-        """Create a hash of the current screen area for novelty detection."""
+        """
+        Create a robust hash of the current screen area for novelty detection.
+        Uses perceptual hashing to handle camera movement and minor pixel changes.
+        """
         if obs is None:
             return 0
         
-        # # Downsample and hash to identify unique areas
-        # small = cv2.resize(obs, (32, 32))
-        # gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
-        # return hash(gray.tobytes())
-
-        # Convert observation to PIL Image
-        pil_img = Image.fromarray(obs)
-        # pHash is resilient to minor camera shifts/noise
-        return str(imagehash.phash(pil_img, hash_size=8))
+        # Downsample significantly to remove fine details
+        small = cv2.resize(obs, (16, 16))
+        gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+        
+        # Apply thresholding to reduce sensitivity to lighting/camera shifts
+        # Convert to binary: dark pixels = 0, bright pixels = 1
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        
+        # Create perceptual hash using average hash algorithm
+        # This is much more robust to minor changes
+        avg = np.mean(binary)
+        hash_bits = (binary > avg).astype(int)
+        
+        # Convert to a single hash value
+        # Areas that look similar will have similar hash values
+        hash_value = 0
+        for i, bit in enumerate(hash_bits.flatten()):
+            if bit:
+                hash_value |= (1 << i)
+        
+        return hash_value
     
     def _detect_hp_change(self, prev_obs, curr_obs):
         """
@@ -293,6 +326,54 @@ class PokemonRewardCalculator:
     def _detect_trial_completion(self, prev_obs, curr_obs):
         """Detect trial completion (would need specific pattern)."""
         # Would look for Z-Crystal acquisition screen, specific text, etc.
+        return False
+    
+    def _is_menu_screen(self, obs):
+        """
+        Detect if current screen is a menu (bag, Pokédex, party, etc.).
+        Menus typically have:
+        - Lots of UI elements (boxes, text)
+        - High contrast edges
+        - Specific color patterns
+        - Static backgrounds
+        """
+        if obs is None:
+            return False
+        
+        # Convert to grayscale for edge detection
+        gray = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
+        
+        # Detect edges (menus have lots of UI boxes/borders)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.sum(edges > 0) / edges.size
+        
+        # Menus typically have high edge density (lots of UI elements)
+        # Normal gameplay has lower edge density (more natural scenery)
+        if edge_density > 0.15:  # Threshold for "lots of edges"
+            return True
+        
+        # Additional check: Look for large uniform color blocks
+        # Menus often have solid color backgrounds/panels
+        # Sample a few regions and check if they're very uniform
+        h, w = obs.shape[:2]
+        
+        # Check center region (menus usually have UI in center)
+        center_region = obs[h//4:3*h//4, w//4:3*w//4, :]
+        std_dev = np.std(center_region)
+        
+        # Low standard deviation = uniform color = likely a menu panel
+        if std_dev < 30:
+            return True
+        
+        # Check for high saturation (menu buttons are often colorful)
+        hsv = cv2.cvtColor(obs, cv2.COLOR_RGB2HSV)
+        saturation = hsv[:, :, 1]
+        high_sat_ratio = np.sum(saturation > 100) / saturation.size
+        
+        # Menus often have colorful buttons/icons
+        if high_sat_ratio > 0.3 and edge_density > 0.10:
+            return True
+        
         return False
     
     def reset(self):
