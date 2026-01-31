@@ -142,20 +142,20 @@ class Route1RewardCalculator:
         
         # Define screen regions (adjust ratios based on your Citra layout)
         top_screen_end = int(h * 0.5)  # Top screen ends around 60% down
-        top_screen = screen[int(h * 0.3):top_screen_end, :]
+        top_screen = screen[:top_screen_end, :]
         bottom_screen = screen[top_screen_end:, :]
         
-        # 1. Check for MENU on bottom screen first
-        if self._is_menu_open(bottom_screen):
-            return 'menu'
+       # 1. BATTLE (highest priority - check top screen for health bars)
+        if self._is_battle_active(top_screen, bottom_screen):
+            return 'battle'
         
-        # 2. Check for DIALOGUE on bottom of TOP screen
+        # 2. DIALOGUE (check top screen bottom area)
         if self._is_dialogue_open(top_screen):
             return 'dialogue'
         
-        # # 3. Check for BATTLE on top screen (health bars in corners)
-        # if self._is_battle_active(screen):  # Uses full screen or top portion
-        #     return 'battle'
+        # 3. MENU (check bottom screen)
+        if self._is_menu_open(bottom_screen):
+            return 'menu'
         
         # 4. Default to overworld
         return 'overworld'
@@ -215,7 +215,7 @@ class Route1RewardCalculator:
         white_ratio = np.sum(white_mask) / white_mask.size
         
         # Dialogue box typically covers 30-70% of the width and 40-80% of height
-        has_white_box = 0.2 < white_ratio < 0.8
+        has_white_box = 0.1 < white_ratio < 0.8
         
         # Method 2: Look for black text (dark pixels on white background)
         dark_mask = gray < 80  # Dark text
@@ -228,7 +228,7 @@ class Route1RewardCalculator:
         # The dialogue box has a distinctive top edge
         top_edge = gray[5:15, :]  # Check near top of dialogue region
         edge_variance = np.var(top_edge)
-        has_edge = edge_variance > 10000  # High variance = edge detected
+        has_edge = edge_variance > 5000  # High variance = edge detected
         
         # Combine detection methods
         # Require white box + text, portrait is bonus but not required
@@ -238,6 +238,183 @@ class Route1RewardCalculator:
         # print(f"Dialogue detection: white={white_ratio:.2f}, text={dark_ratio:.2f}, edge={edge_variance:.2f}")
         
         return is_dialogue
+
+    def _is_battle_active(self, top_screen: np.ndarray, bottom_screen: np.ndarray) -> bool:
+        """
+        Detect if we're in a Pokemon battle.
+        
+        Battle characteristics:
+        - Top screen: Health bars (red/yellow/green), Pokemon sprites, level numbers
+        - Bottom screen: Fight/Bag/Pokemon/Run menu OR move selection
+        - Distinctive UI layout different from overworld/menu
+        """
+        # Method 1: Health bars on top screen (most reliable)
+        if self._detect_health_bars(top_screen):
+            print("Health bars detected")
+            return True
+        
+        # Method 2: Battle menu detection on bottom screen
+        if self._is_battle_menu(bottom_screen):
+            print("Battle menu detected")
+            return True
+        
+        # Method 3: Battle transition effects (flash, etc)
+        if self._detect_battle_transition(top_screen):
+            print("Battle transition detected")
+            return True
+            
+        return False
+    
+    def _detect_health_bars(self, top_screen: np.ndarray) -> bool:
+        """
+        Detect health bars on top screen.
+        Sun/Moon layout:
+        - Opponent (enemy): Top RIGHT corner
+        - Player: Bottom LEFT corner
+        """
+        h, w = top_screen.shape[:2]
+        
+        # Enemy health bar: Top right region
+        enemy_region = top_screen[:int(h*0.25), int(w*0.55):]
+        
+        # Player health bar: Bottom left region  
+        player_region = top_screen[int(h*0.80):int(h*0.95), :int(w*0.40)]
+
+        # Convert to HSV for color detection
+        hsv_enemy = cv2.cvtColor(enemy_region, cv2.COLOR_RGB2HSV)
+        hsv_player = cv2.cvtColor(player_region, cv2.COLOR_RGB2HSV)
+        
+        # Health bar colors
+        # Red: Low HP or border color
+        lower_red1 = np.array([0, 100, 50])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 100, 50])
+        upper_red2 = np.array([180, 255, 255])
+        
+        # Green/Teal: High HP (Sun/Moon uses slightly teal-ish green)
+        lower_green = np.array([35, 50, 50])
+        upper_green = np.array([90, 255, 255])
+        
+        # Yellow: Medium HP
+        lower_yellow = np.array([20, 100, 100])
+        upper_yellow = np.array([35, 255, 255])
+        
+        # Detect colors in both regions
+        red_mask_enemy = cv2.inRange(hsv_enemy, lower_red1, upper_red1) | \
+                        cv2.inRange(hsv_enemy, lower_red2, upper_red2)
+        red_mask_player = cv2.inRange(hsv_player, lower_red1, upper_red1) | \
+                         cv2.inRange(hsv_player, lower_red2, upper_red2)
+        
+        green_mask_enemy = cv2.inRange(hsv_enemy, lower_green, upper_green)
+        green_mask_player = cv2.inRange(hsv_player, lower_green, upper_green)
+        
+        yellow_mask_enemy = cv2.inRange(hsv_enemy, lower_yellow, upper_yellow)
+        yellow_mask_player = cv2.inRange(hsv_player, lower_yellow, upper_yellow)
+        
+        # Count pixels
+        enemy_hp_pixels = np.sum(red_mask_enemy > 0) + np.sum(green_mask_enemy > 0) + np.sum(yellow_mask_enemy > 0)
+        player_hp_pixels = np.sum(red_mask_player > 0) + np.sum(green_mask_player > 0) + np.sum(yellow_mask_player > 0)
+        
+        # Debug visualization (optional)
+        # cv2.imshow('Enemy HP Region', enemy_region)
+        # cv2.imshow('Player HP Region', player_region)
+        # cv2.waitKey(0)
+        # print(f"Enemy HP pixels: {enemy_hp_pixels}, Player HP pixels: {player_hp_pixels}")
+        
+        # Battle detected if we see health indicators in either location
+        # Both present = definite battle, one present = likely battle
+        has_enemy_hp = enemy_hp_pixels > 100
+        has_player_hp = player_hp_pixels > 150  # Player bar is usually larger
+        
+        return has_enemy_hp or has_player_hp
+    
+    def _is_battle_menu(self, bottom_screen: np.ndarray) -> bool:
+        """
+        Detect Sun/Moon battle menu with rounded colorful buttons.
+        
+        Distinctive features:
+        - Cyan/teal background (battle arena floor)
+        - Red/Orange "FIGHT" button (right side)
+        - Green "POKÉMON" button (top left)
+        - Yellow/Gold "BAG" button (middle left)  
+        - Blue "RUN" button (bottom)
+        - Much more saturated than X-menu
+        """
+        # Convert to HSV for color analysis
+        hsv = cv2.cvtColor(bottom_screen, cv2.COLOR_RGB2HSV)
+        
+        # 1. Detect distinctive battle menu colors
+        # Red/Orange (FIGHT button) - High saturation, warm hue
+        lower_red_orange = np.array([0, 120, 100])
+        upper_red_orange = np.array([25, 255, 255])
+        fight_mask = cv2.inRange(hsv, lower_red_orange, upper_red_orange)
+        fight_pixels = np.sum(fight_mask > 0)
+        
+        # Green (POKÉMON button)
+        lower_green = np.array([35, 100, 50])
+        upper_green = np.array([85, 255, 200])
+        pokemon_mask = cv2.inRange(hsv, lower_green, upper_green)
+        pokemon_pixels = np.sum(pokemon_mask > 0)
+        
+        # Yellow/Gold (BAG button)
+        lower_yellow = np.array([15, 100, 100])
+        upper_yellow = np.array([35, 255, 255])
+        bag_mask = cv2.inRange(hsv, lower_yellow, lower_yellow)
+        bag_pixels = np.sum(bag_mask > 0)
+        
+        # Blue (RUN button)
+        lower_blue = np.array([90, 80, 50])
+        upper_blue = np.array([130, 255, 255])
+        run_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        run_pixels = np.sum(run_mask > 0)
+        
+        # Cyan/Teal background (battle floor)
+        lower_cyan = np.array([0, 191, 165])
+        upper_cyan = np.array([64, 240, 224])
+        bg_mask = cv2.inRange(hsv, lower_cyan, upper_cyan)
+        bg_pixels = np.sum(bg_mask > 0)
+        
+        # Debug output (uncomment to tune)
+        # print(f"Battle colors: FIGHT={fight_pixels}, PKMN={pokemon_pixels}, "
+        #       f"BAG={bag_pixels}, RUN={run_pixels}, BG={bg_pixels}")
+        
+        # 2. Battle signature detection
+        # Must have cyan/teal background (distinguishes from X-menu)
+        has_cyan_bg = bg_pixels > (bottom_screen.size * 0.01)
+        
+        # Must have multiple button colors present (at least 2 of the 4)
+        button_colors_detected = sum([
+            fight_pixels > 500,
+            pokemon_pixels > 300,
+            bag_pixels > 300,
+            run_pixels > 500
+        ])
+        has_multiple_buttons = button_colors_detected >= 2
+        
+        # 3. Texture check: Battle menu is busier than X-menu
+        # Has lots of edges due to button borders/icons
+        gray = cv2.cvtColor(bottom_screen, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.sum(edges > 0) / edges.size
+        
+        # X-menu: ~2-6% edges, Battle menu: ~8-15% edges (more complex UI)
+        is_complex_ui = 0.06 < edge_density < 0.20
+        
+        return has_cyan_bg and has_multiple_buttons and is_complex_ui
+    
+    def _detect_battle_transition(self, top_screen: np.ndarray) -> bool:
+        """
+        Detect battle start/end transitions.
+        - Flash effects (screen brightens suddenly)
+        - Vignette effect (darkened corners during intro)
+        """
+        # Check for extreme brightness (flash)
+        mean_brightness = np.mean(top_screen)
+        
+        # Battle flash is very bright (240+) or very dark vignette (< 40)
+        is_flash = mean_brightness > 150 or mean_brightness < 30
+        
+        return is_flash
     
     def _analyze_movement(self, screen: np.ndarray) -> Tuple[float, Tuple[int, int]]:
         """
